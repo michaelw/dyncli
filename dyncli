@@ -2,13 +2,32 @@
 from __future__ import print_function
 from builtins import str
 import json
+import time
 import argparse
 import requests
+from requests.compat import urljoin
+import logging
 from os import environ
 from sys import exit
+import sys
+
+# try:
+#     import http.client as http_client
+# except ImportError:
+#     # Python 2
+#     import httplib as http_client
+# http_client.HTTPConnection.debuglevel = 1
+
+# # You must initialize logging, otherwise you'll not see debug output.
+# logging.basicConfig()
+# logging.getLogger().setLevel(logging.DEBUG)
+# requests_log = logging.getLogger("requests.packages.urllib3")
+# requests_log.setLevel(logging.DEBUG)
+# requests_log.propagate = True
+
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-e','--endpoint',dest='endpoint',default='https://api2.dynect.net/REST/',
+parser.add_argument('-e','--endpoint',dest='endpoint',default='https://api.dynect.net/REST/',
   help='The endpoint to make API requests.')
 parser.add_argument('-c','--create',dest='create',
   help='Create a new record. Defaults to A record unless --cname is set.')
@@ -34,6 +53,8 @@ parser.add_argument('-l','--list',dest='list',action='store_true',
   help='List all dns records as a csv file.')
 parser.add_argument('--verbose',dest='verbose',action='store_true',
   help='Print out api responses.')
+parser.add_argument('--list-users',dest='list_users',action='store_true',
+  help='List all users as a csv file.')
 args = parser.parse_args()
 
 config = {}
@@ -49,6 +70,7 @@ config['user'] = args.user
 config['password'] = args.password
 config['account'] = args.account
 config['list'] = args.list
+config['list_users'] = args.list_users
 config['verbose'] = args.verbose
 
 def error(msg,exit_code=1):
@@ -81,7 +103,8 @@ def verify_credentials():
   test_env('user','DYN_USER')
   test_env('password','DYN_PW')
   test_env('account','DYN_ACCOUNT')
-  test_env('zone','DYN_ZONE')
+  if not config['list_users']:
+    test_env('zone','DYN_ZONE')
 
 def call_dyn(suffix,method='get',data=None,detailed=False):
   '''
@@ -106,10 +129,18 @@ def call_dyn(suffix,method='get',data=None,detailed=False):
   if config.get('token'):
     header['Auth-Token'] = config['token']
 
-  try:
-    response = getattr(requests, method)(url,headers=header,data=data)
-  except Exception as e:
-    error(e)
+  while True:
+    try:
+      response = getattr(requests, method)(url,headers=header,data=data,allow_redirects = False)
+      if response.status_code == 307:
+        url = urljoin(url,response.headers['Location'])
+        data = None
+        print('Waiting... %s' % url, file=sys.stderr)
+        time.sleep(5)
+      else:
+        break
+    except Exception as e:
+      error(e)
 
   resp = json.loads(response.text)
   if config['verbose']:
@@ -138,11 +169,26 @@ def get_token(credentials):
   }
 
   # Squelch this message if we're printing a CSV
-  if not config['list']:
-    print('Initializing session...')
+  print('Initializing session...', file=sys.stderr)
 
   resp = call_dyn(suffix,method='post',data=data)
   return resp['data']['token']
+
+def list_users():
+  suffix = 'User/'
+  data = call_dyn(suffix, detailed=True)
+  record_format=["email","first_name","last_name","status","group_name"]
+  records = []
+  records.append(','.join(record_format))
+  for user in list(data['data']):
+    records.append(','.join([
+      user['email'],
+      user['first_name'],
+      user['last_name'],
+      user['status'],
+      "\""+','.join(user['group_name'])+"\""
+    ]))
+  return records
 
 def list_records():
   '''
@@ -191,7 +237,6 @@ def list_records():
         str(address_data),
       ])
       records.append(record)
-
   return records
    
 def publish(zone):
@@ -287,8 +332,7 @@ def end_session(token):
   suffix = 'Session/'
 
   # Squelch these lines if we are printing a CSV format
-  if not config['list']:
-    print('Ending current session...')
+  print('Ending current session...', file=sys.stderr)
 
   call_dyn(suffix,method='delete')
   exit()
@@ -300,6 +344,9 @@ if __name__ == '__main__':
   if config['list']:
     for record in list_records():
       print(record)
+
+  elif config['list_users']:
+    print('\n'.join(list_users()))
 
   elif config['create']:
     create_record(config)

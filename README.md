@@ -32,6 +32,7 @@ optional arguments:
                         as DYN_ZONE in environment.
   -l, --list            List all dns records as a csv file.
   --verbose             Print out api responses.
+  --list-users          List all users as a csv file.
 ```
 
 Dyn is a nice DNS service. It's an alternative to Amazon's Route 53. Though I do not believe that dyn's API is as robust as amazone, with the right set of tools is just dandy.
